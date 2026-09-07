@@ -19,7 +19,9 @@ const battles = {};
 io.on('connection', (socket) => {
     console.log(`[+] Client connected: ${socket.id}`);
 
+    // ==========================================
     // 1. ĐĂNG NHẬP & ĐỒNG BỘ MAP
+    // ==========================================
     socket.on('login', (data) => {
         players[socket.id] = {
             id: socket.id,
@@ -60,37 +62,64 @@ io.on('connection', (socket) => {
         socket.to(`map_${p.mapId}`).emit('playerMoved', { id: socket.id, x: p.x, y: p.y, dir: p.dir });
     });
 
+    // ==========================================
     // 2. HỆ THỐNG TỔ ĐỘI (PARTY)
-    socket.on('inviteParty', (targetId) => {
-        // [ĐÃ SỬA] Đổi 'partyInviteRequest' thành 'inviteParty' để khớp với Client
-        if (players[targetId]) io.to(targetId).emit('inviteParty', { fromId: socket.id, fromName: players[socket.id].name });
+    // ==========================================
+    socket.on('inviteParty', (data) => {
+        // [FIX] Nhận object payload từ client (chứa targetId, fromId, fromName)
+        const targetId = data.targetId;
+        if (players[targetId]) {
+            io.to(targetId).emit('inviteParty', { 
+                fromId: socket.id, 
+                fromName: players[socket.id].name 
+            });
+        }
     });
 
-    socket.on('acceptParty', (fromId) => {
-        if (!players[fromId] || !players[socket.id]) return;
-        let partyId = players[fromId].partyId;
+    socket.on('acceptParty', (data) => {
+        // [FIX] data.targetId chính là ID của người gửi lời mời ban đầu
+        const requesterId = data.targetId; 
+        
+        if (!players[requesterId] || !players[socket.id]) return;
+        
+        let partyId = players[requesterId].partyId;
         if (!partyId) {
-            partyId = `party_${fromId}`;
-            parties[partyId] = [fromId];
-            players[fromId].partyId = partyId;
+            partyId = `party_${requesterId}`;
+            parties[partyId] = [requesterId];
+            players[requesterId].partyId = partyId;
         }
+        
         if (parties[partyId].length < 4) {
             parties[partyId].push(socket.id);
             players[socket.id].partyId = partyId;
+            
             io.to(partyId).emit('partyUpdated', parties[partyId].map(id => players[id]));
+            
             socket.join(partyId);
-            if(players[fromId]) io.sockets.sockets.get(fromId).join(partyId);
+            // Kéo người mời vào chung room socket nếu chưa có
+            const reqSocket = io.sockets.sockets.get(requesterId);
+            if(reqSocket) reqSocket.join(partyId);
         }
     });
 
+    // ==========================================
     // 3. HỆ THỐNG PVP & CẦU CỨU
-    // [ĐÃ SỬA] Đổi 'requestPK' thành 'pkRequest' để khớp với Client
-    socket.on('pkRequest', (targetId) => {
+    // ==========================================
+    socket.on('pkRequest', (data) => {
+        // [FIX] Nhận object payload
+        const targetId = data.targetId;
         if (!players[targetId]) return;
-        io.to(targetId).emit('pkRequest', { fromId: socket.id, fromName: players[socket.id].name });
+        
+        io.to(targetId).emit('pkRequest', { 
+            fromId: socket.id, 
+            fromName: players[socket.id].name 
+        });
     });
 
-    socket.on('acceptPK', (challengerId) => {
+    socket.on('acceptPK', (data) => {
+        // [FIX] data.targetId chính là ID của người thách đấu
+        const challengerId = data.targetId; 
+        
         const roomId = `battle_${challengerId}_${socket.id}`;
         battles[roomId] = { teamA: [challengerId], teamB: [socket.id], state: 'waiting' };
         
@@ -98,24 +127,26 @@ io.on('connection', (socket) => {
         const challengerSocket = io.sockets.sockets.get(challengerId);
         if(challengerSocket) challengerSocket.join(roomId);
 
-        io.to(roomId).emit('battleStarted', { roomId, teamA: [players[challengerId]], teamB: [players[socket.id]] });
+        io.to(roomId).emit('battleStarted', { 
+            roomId, 
+            teamA: [players[challengerId]], 
+            teamB: [players[socket.id]] 
+        });
     });
 
     socket.on('callBackup', (roomId) => {
         const p = players[socket.id];
+        if(!p) return;
         socket.to(`map_${p.mapId}`).emit('backupRequested', { fromId: socket.id, fromName: p.name, roomId });
     });
 
     socket.on('joinBackup', (data) => {
         const battle = battles[data.roomId];
         if (!battle) return;
-        // Logic thêm vào teamA hoặc teamB tùy thuộc vào đồng minh (tạm mặc định team phe gọi)
-        // ... (Cần xác định phe dựa vào fromId)
         socket.join(data.roomId);
         io.to(data.roomId).emit('backupArrived', players[socket.id]);
     });
 
-    // Đồng bộ lệnh Combat (Skill, Target)
     socket.on('battleAction', (data) => {
         socket.to(data.roomId).emit('executeAction', data);
     });
