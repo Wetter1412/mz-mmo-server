@@ -16,13 +16,11 @@ const parties = {};
 const battles = {};
 
 io.on('connection', (socket) => {
-    console.log(`[+] Client connected: ${socket.id}`);
+    console.log(`[+] Đã kết nối Client: ${socket.id}`);
 
     socket.on('login', (data) => {
         players[socket.id] = {
-            id: socket.id,
-            name: data.name,
-            mapId: data.mapId,
+            id: socket.id, name: data.name, mapId: data.mapId,
             x: data.x, y: data.y, dir: data.dir,
             charName: data.charName, charIndex: data.charIndex,
             partyId: null, hp: data.hp, mp: data.mp, maxHp: data.maxHp
@@ -48,23 +46,32 @@ io.on('connection', (socket) => {
     });
 
     // =====================================
-    // SỬA LỖI TỔ ĐỘI / PK 
+    // TRACKING SỰ KIỆN GỬI YÊU CẦU
     // =====================================
     socket.on('inviteParty', (data) => {
-        if (!players[socket.id]) return; // Chống sập server nếu client lỗi
+        console.log(`\n[Server] Nhận lệnh 'inviteParty' từ: ${socket.id}`);
+        console.log(`[Server] Dữ liệu gói tin:`, data);
+        
+        if (!players[socket.id]) {
+            console.log(`[Server] Lỗi: Người gửi không tồn tại trong bộ nhớ!`);
+            return;
+        }
 
-        // Nhận diện linh hoạt cả khi client gửi Object mới lẫn String cũ
         const targetId = typeof data === 'object' ? data.targetId : data;
         
         if (players[targetId]) {
+            console.log(`[Server] BẮN TÍN HIỆU THÀNH CÔNG sang Client: ${targetId}`);
             io.to(targetId).emit('inviteParty', { 
                 fromId: socket.id, 
                 fromName: players[socket.id].name 
             });
+        } else {
+            console.log(`[Server] THẤT BẠI: Người chơi mục tiêu (${targetId}) đã offline hoặc không tồn tại.`);
         }
     });
 
     socket.on('acceptParty', (data) => {
+        console.log(`[Server] Lời mời được chấp nhận! Data:`, data);
         if (!players[socket.id]) return;
         
         const requesterId = typeof data === 'object' ? data.targetId : data; 
@@ -84,33 +91,8 @@ io.on('connection', (socket) => {
             socket.join(partyId);
             const reqSocket = io.sockets.sockets.get(requesterId);
             if(reqSocket) reqSocket.join(partyId);
+            console.log(`[Server] Đã tạo/thêm vào Party ID: ${partyId}`);
         }
-    });
-
-    socket.on('pkRequest', (data) => {
-        if (!players[socket.id]) return;
-        const targetId = typeof data === 'object' ? data.targetId : data;
-        
-        if (players[targetId]) {
-            io.to(targetId).emit('pkRequest', { 
-                fromId: socket.id, 
-                fromName: players[socket.id].name 
-            });
-        }
-    });
-
-    socket.on('acceptPK', (data) => {
-        if (!players[socket.id]) return;
-        const challengerId = typeof data === 'object' ? data.targetId : data; 
-        
-        const roomId = `battle_${challengerId}_${socket.id}`;
-        battles[roomId] = { teamA: [challengerId], teamB: [socket.id], state: 'waiting' };
-        
-        socket.join(roomId);
-        const challengerSocket = io.sockets.sockets.get(challengerId);
-        if(challengerSocket) challengerSocket.join(roomId);
-
-        io.to(roomId).emit('battleStarted', { roomId, teamA: [players[challengerId]], teamB: [players[socket.id]] });
     });
 
     socket.on('disconnect', () => {
@@ -118,9 +100,9 @@ io.on('connection', (socket) => {
             socket.to(`map_${players[socket.id].mapId}`).emit('playerLeft', socket.id);
             delete players[socket.id];
         }
-        console.log(`[-] Client disconnected: ${socket.id}`);
+        console.log(`[-] Đã ngắt kết nối: ${socket.id}`);
     });
 });
 
 const PORT = process.env.PORT || 8080;
-server.listen(PORT, () => { console.log(`[V] MMO Server is running on port ${PORT}`); });
+server.listen(PORT, () => { console.log(`[V] MMO Server đang chạy trên cổng ${PORT}`); });
