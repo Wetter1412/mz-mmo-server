@@ -62,7 +62,8 @@ io.on('connection', (socket) => {
 
     // 2. HỆ THỐNG TỔ ĐỘI (PARTY)
     socket.on('inviteParty', (targetId) => {
-        if (players[targetId]) io.to(targetId).emit('partyInviteRequest', { fromId: socket.id, fromName: players[socket.id].name });
+        // [ĐÃ SỬA] Đổi 'partyInviteRequest' thành 'inviteParty' để khớp với Client
+        if (players[targetId]) io.to(targetId).emit('inviteParty', { fromId: socket.id, fromName: players[socket.id].name });
     });
 
     socket.on('acceptParty', (fromId) => {
@@ -83,7 +84,8 @@ io.on('connection', (socket) => {
     });
 
     // 3. HỆ THỐNG PVP & CẦU CỨU
-    socket.on('requestPK', (targetId) => {
+    // [ĐÃ SỬA] Đổi 'requestPK' thành 'pkRequest' để khớp với Client
+    socket.on('pkRequest', (targetId) => {
         if (!players[targetId]) return;
         io.to(targetId).emit('pkRequest', { fromId: socket.id, fromName: players[socket.id].name });
     });
