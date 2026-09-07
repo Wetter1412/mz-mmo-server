@@ -1,158 +1,108 @@
-// server.js
 const express = require('express');
 const http = require('http');
 const { Server } = require('socket.io');
+const cors = require('cors');
 
 const app = express();
+app.use(cors());
+
 const server = http.createServer(app);
 const io = new Server(server, {
     cors: { origin: '*', methods: ['GET', 'POST'] }
 });
 
-// In-memory Database
-const players = {};
+const players = {}; 
 const parties = {};
 const battles = {};
 
 io.on('connection', (socket) => {
-    console.log(`[+] Client connected: ${socket.id}`);
+    console.log(`[+] Đã kết nối Client: ${socket.id}`);
 
-    // ĐĂNG NHẬP
-    socket.on('login', (payload) => {
-        try {
-            if (!payload) return;
-            const { name, mapId, x, y, direction, charName, charIndex, hp, mp } = payload;
-            
-            players[socket.id] = { 
-                id: socket.id, name, mapId, x, y, direction, charName, charIndex, hp, mp 
-            };
-            
-            const roomName = `map_${mapId}`;
-            socket.join(roomName);
-            
-            // Gửi danh sách người chơi hiện có trong map cho người mới
-            const mapPlayers = Object.values(players).filter(p => p.mapId === mapId && p.id !== socket.id);
-            socket.emit('initMapPlayers', mapPlayers);
-
-            // Báo cho những người cũ trong map có người mới
-            socket.to(roomName).emit('playerJoined', players[socket.id]);
-        } catch (err) {
-            console.error('Error on login:', err);
-        }
+    socket.on('login', (data) => {
+        players[socket.id] = {
+            id: socket.id, name: data.name, mapId: data.mapId,
+            x: data.x, y: data.y, dir: data.dir,
+            charName: data.charName, charIndex: data.charIndex,
+            partyId: null, hp: data.hp, mp: data.mp, maxHp: data.maxHp
+        };
+        socket.join(`map_${data.mapId}`);
+        const mapPlayers = Object.values(players).filter(p => p.mapId === data.mapId && p.id !== socket.id);
+        socket.emit('mapData', mapPlayers);
+        socket.to(`map_${data.mapId}`).emit('playerJoined', players[socket.id]);
     });
 
-    // DI CHUYỂN
-    socket.on('move', (payload) => {
-        try {
-            if (!players[socket.id] || !payload) return;
-            const player = players[socket.id];
-            player.x = payload.x;
-            player.y = payload.y;
-            player.direction = payload.direction;
+    socket.on('move', (data) => {
+        if (!players[socket.id]) return;
+        const p = players[socket.id];
+        if (p.mapId !== data.mapId) {
+            socket.leave(`map_${p.mapId}`);
+            socket.to(`map_${p.mapId}`).emit('playerLeft', socket.id);
+            p.mapId = data.mapId;
+            socket.join(`map_${p.mapId}`);
+            socket.to(`map_${p.mapId}`).emit('playerJoined', p);
+        }
+        p.x = data.x; p.y = data.y; p.dir = data.dir;
+        socket.to(`map_${p.mapId}`).emit('playerMoved', { id: socket.id, x: p.x, y: p.y, dir: p.dir });
+    });
 
-            // Broadcast tọa độ cho những người cùng Map (trừ người gửi)
-            socket.to(`map_${player.mapId}`).emit('playerMoved', {
-                id: socket.id,
-                x: payload.x,
-                y: payload.y,
-                direction: payload.direction
+    // =====================================
+    // TRACKING SỰ KIỆN GỬI YÊU CẦU
+    // =====================================
+    socket.on('inviteParty', (data) => {
+        console.log(`\n[Server] Nhận lệnh 'inviteParty' từ: ${socket.id}`);
+        console.log(`[Server] Dữ liệu gói tin:`, data);
+        
+        if (!players[socket.id]) {
+            console.log(`[Server] Lỗi: Người gửi không tồn tại trong bộ nhớ!`);
+            return;
+        }
+
+        const targetId = typeof data === 'object' ? data.targetId : data;
+        
+        if (players[targetId]) {
+            console.log(`[Server] BẮN TÍN HIỆU THÀNH CÔNG sang Client: ${targetId}`);
+            io.to(targetId).emit('inviteParty', { 
+                fromId: socket.id, 
+                fromName: players[socket.id].name 
             });
-        } catch (err) {
-            console.error('Error on move:', err);
+        } else {
+            console.log(`[Server] THẤT BẠI: Người chơi mục tiêu (${targetId}) đã offline hoặc không tồn tại.`);
         }
     });
 
-    // CHUYỂN MAP
-    socket.on('changeMap', (payload) => {
-        try {
-            if (!players[socket.id] || !payload || !payload.mapId) return;
-            const player = players[socket.id];
-            
-            socket.leave(`map_${player.mapId}`);
-            socket.to(`map_${player.mapId}`).emit('playerLeft', socket.id); // Báo map cũ
-            
-            player.mapId = payload.mapId;
-            socket.join(`map_${player.mapId}`);
-            socket.to(`map_${player.mapId}`).emit('playerJoined', player); // Báo map mới
-        } catch (err) {
-            console.error('Error on map change:', err);
+    socket.on('acceptParty', (data) => {
+        console.log(`[Server] Lời mời được chấp nhận! Data:`, data);
+        if (!players[socket.id]) return;
+        
+        const requesterId = typeof data === 'object' ? data.targetId : data; 
+        if (!players[requesterId]) return;
+        
+        let partyId = players[requesterId].partyId;
+        if (!partyId) {
+            partyId = `party_${requesterId}`;
+            parties[partyId] = [requesterId];
+            players[requesterId].partyId = partyId;
+        }
+        
+        if (parties[partyId].length < 4) {
+            parties[partyId].push(socket.id);
+            players[socket.id].partyId = partyId;
+            io.to(partyId).emit('partyUpdated', parties[partyId].map(id => players[id]));
+            socket.join(partyId);
+            const reqSocket = io.sockets.sockets.get(requesterId);
+            if(reqSocket) reqSocket.join(partyId);
+            console.log(`[Server] Đã tạo/thêm vào Party ID: ${partyId}`);
         }
     });
 
-    // TƯƠNG TÁC: PK & TỔ ĐỘI
-    socket.on('pkRequest', (payload) => handleInteractionRequest(socket, payload, 'PK'));
-    socket.on('inviteParty', (payload) => handleInteractionRequest(socket, payload, 'PARTY'));
-
-    // PHẢN HỒI: CHẤP NHẬN PK / TỔ ĐỘI
-    socket.on('acceptPK', (payload) => {
-        try {
-            if (!payload || !payload.targetId) return;
-            const p1 = players[socket.id];
-            const p2 = players[payload.targetId]; // Người mời
-            
-            if (!p1 || !p2) return;
-            
-            const battleId = `battle_${Date.now()}`;
-            battles[battleId] = { teamA: [p1.id], teamB: [p2.id] };
-            
-            io.to(p1.id).to(p2.id).emit('battleStarted', { battleId, type: 'PvP' });
-        } catch (err) {
-            console.error('Error on acceptPK:', err);
-        }
-    });
-
-    // GỌI HỖ TRỢ TRONG BATTLE
-    socket.on('backupRequest', (payload) => {
-        try {
-            if (!players[socket.id] || !payload || !payload.battleId) return;
-            const player = players[socket.id];
-            
-            // Broadcast cho tất cả trong map
-            socket.to(`map_${player.mapId}`).emit('backupRequested', {
-                fromId: socket.id,
-                fromName: player.name,
-                battleId: payload.battleId
-            });
-        } catch (err) {
-             console.error('Error on backup request:', err);
-        }
-    });
-
-    // NGẮT KẾT NỐI
     socket.on('disconnect', () => {
-        try {
-            if (players[socket.id]) {
-                const mapId = players[socket.id].mapId;
-                socket.to(`map_${mapId}`).emit('playerLeft', socket.id);
-                delete players[socket.id];
-                console.log(`[-] Client disconnected: ${socket.id}`);
-            }
-        } catch (err) {
-            console.error('Error on disconnect:', err);
+        if (players[socket.id]) {
+            socket.to(`map_${players[socket.id].mapId}`).emit('playerLeft', socket.id);
+            delete players[socket.id];
         }
+        console.log(`[-] Đã ngắt kết nối: ${socket.id}`);
     });
 });
 
-// Hàm hỗ trợ định tuyến tương tác
-function handleInteractionRequest(socket, payload, type) {
-    try {
-        if (!payload || !payload.targetId || !payload.fromId) return;
-        const target = players[payload.targetId];
-        if (!target) return; // Người nhận không tồn tại/đã offline
-
-        // Forward tới đích
-        io.to(payload.targetId).emit('receiveRequest', {
-            type: type,
-            targetId: payload.targetId,
-            fromId: payload.fromId,
-            fromName: payload.fromName
-        });
-    } catch (err) {
-        console.error(`Error on ${type} request:`, err);
-    }
-}
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`Server is running on port ${PORT}`);
-});
+const PORT = process.env.PORT || 8080;
+server.listen(PORT, () => { console.log(`[V] MMO Server đang chạy trên cổng ${PORT}`); });
